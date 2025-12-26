@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mini RPG</title>
+  <style>
+    html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;font-family:system-ui,Segoe UI,Roboto,Arial}
+    #wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px}
+    canvas{background:#0f1720;border:1px solid #263244;border-radius:10px;image-rendering:pixelated}
+    .hud{max-width:900px;width:min(900px,95vw);display:flex;justify-content:space-between;gap:10px;font-size:14px}
+    .box{border:1px solid #263244;border-radius:10px;padding:10px;background:#0c1320}
+    kbd{border:1px solid #2b3a52;border-bottom-width:3px;padding:1px 6px;border-radius:6px;background:#0b1220}
+    a{color:#7dd3fc}
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <div class="hud">
+    <div class="box" id="stats">Загрузка…</div>
+    <div class="box" style="flex:1" id="tips">
+      Управление: <kbd>WASD</kbd>/<kbd>Стрелки</kbd> — ходьба, <kbd>Space</kbd> — удар, <kbd>E</kbd> — подобрать/использовать.
+      Цель: победить слизня, не умерев.
+    </div>
+  </div>
+  <canvas id="c" width="900" height="520"></canvas>
+  <div class="box" style="max-width:900px;width:min(900px,95vw)" id="log"></div>
+</div>
+
+<script>
+(() => {
+  // ----- Simple canvas RPG (no build tools) -----
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  const logEl = document.getElementById('log');
+  const statsEl = document.getElementById('stats');
+
+  const W = canvas.width, H = canvas.height;
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const dist2 = (ax, ay, bx, by) => (ax-bx)*(ax-bx) + (ay-by)*(ay-by);
+
+  function log(msg){
+    const t = new Date().toLocaleTimeString();
+    logEl.innerHTML = `<div><b>${t}</b> — ${msg}</div>` + logEl.innerHTML;
+  }
+
+  const keys = new Set();
+  window.addEventListener('keydown', (e) => {
+    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+    keys.add(e.key.toLowerCase());
+  });
+  window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+
+  // World: a few walls (rectangles)
+  const walls = [
+    {x:140,y:120,w:620,h:18},
+    {x:140,y:382,w:620,h:18},
+    {x:140,y:120,w:18,h:280},
+    {x:742,y:120,w:18,h:280},
+    {x:360,y:240,w:180,h:18},
+  ];
+
+  function rectsOverlap(a,b){
+    return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+  }
+
+  function moveWithCollisions(ent, dx, dy){
+    // axis separated collisions for simplicity
+    ent.x += dx;
+    let r = {x:ent.x-ent.r, y:ent.y-ent.r, w:ent.r*2, h:ent.r*2};
+    for (const w of walls){
+      if (rectsOverlap(r, w)){
+        ent.x -= dx;
+        break;
+      }
+    }
+    ent.y += dy;
+    r = {x:ent.x-ent.r, y:ent.y-ent.r, w:ent.r*2, h:ent.r*2};
+    for (const w of walls){
+      if (rectsOverlap(r, w)){
+        ent.y -= dy;
+        break;
+      }
+    }
+    ent.x = clamp(ent.x, ent.r, W-ent.r);
+    ent.y = clamp(ent.y, ent.r, H-ent.r);
+  }
+
+  const player = {
+    x: 220, y: 260, r: 14,
+    hp: 30, hpMax: 30,
+    lvl: 1, xp: 0, xpNext: 12,
+    atk: 6, speed: 2.2,
+    potions: 1,
+    iFrames: 0,
+    cooldown: 0,
+  };
+
+  const slime = {
+    x: 660, y: 260, r: 16,
+    hp: 26, hpMax: 26,
+    atk: 4, speed: 1.65,
+    aggro: 220,
+    cooldown: 0,
+    alive: true
+  };
+
+  // Simple ground loot: potion drop on start + maybe from slime
+  const loot = [
+    {x: 450, y: 180, r: 10, type: 'potion', alive: true}
+  ];
+
+  function giveXP(amount){
+    player.xp += amount;
+    log(`Получено опыта: +${amount}.`);
+    while (player.xp >= player.xpNext){
+      player.xp -= player.xpNext;
+      player.lvl += 1;
+      player.xpNext = Math.round(player.xpNext * 1.35 + 6);
+      player.hpMax += 6;
+      player.hp = player.hpMax;
+      player.atk += 2;
+      log(`Уровень повышен! Теперь уровень ${player.lvl}, атака ${player.atk}, HP ${player.hpMax}.`);
+    }
+  }
+
+  function usePotion(){
+    if (player.potions <= 0) { log('Зелья закончились.'); return; }
+    if (player.hp >= player.hpMax) { log('HP и так полные.'); return; }
+    player.potions--;
+    const heal = 12 + player.lvl * 2;
+    player.hp = clamp(player.hp + heal, 0, player.hpMax);
+    log(`Использовано зелье: +${heal} HP.`);
+  }
+
+  function pickupLoot(){
+    for (const it of loot){
+      if (!it.alive) continue;
+      if (dist2(player.x, player.y, it.x, it.y) <= (player.r + it.r + 6)**2){
+        it.alive = false;
+        if (it.type === 'potion'){
+          player.potions++;
+          log('Подобрано зелье лечения (+1).');
+        }
+        return;
+      }
+    }
+    // If no loot nearby, treat E as "use potion"
+    usePotion();
+  }
+
+  function attack(){
+    if (player.cooldown > 0) return;
+    player.cooldown = 22; // frames
+    // melee radius
+    const reach = player.r + 28;
+    if (slime.alive && dist2(player.x, player.y, slime.x, slime.y) <= reach*reach){
+      slime.hp -= player.atk;
+      log(`Удар! Слизень получает ${player.atk} урона.`);
+      if (slime.hp <= 0){
+        slime.hp = 0;
+        slime.alive = false;
+        log('Слизень побеждён! (Квест выполнен)');
+        giveXP(18);
+        // 50% drop potion
+        if (Math.random() < 0.5){
+          loot.push({x: slime.x, y: slime.y, r: 10, type:'potion', alive:true});
+          log('Слизень уронил зелье.');
+        }
+      }
+    } else {
+      log('Удар в пустоту.');
+    }
+  }
+
+  function damagePlayer(dmg){
+    if (player.iFrames > 0) return;
+    player.hp -= dmg;
+    player.iFrames = 28;
+    log(`Ты получаешь ${dmg} урона.`);
+    if (player.hp <= 0){
+      player.hp = 0;
+      log('Ты погиб. Обнови страницу, чтобы начать заново.');
+    }
+  }
+
+  function slimeAI(){
+    if (!slime.alive || player.hp <= 0) return;
+
+    const d = Math.sqrt(dist2(player.x, player.y, slime.x, slime.y));
+    if (d < slime.aggro){
+      const dx = (player.x - slime.x) / (d || 1);
+      const dy = (player.y - slime.y) / (d || 1);
+      // move toward player if not too close
+      if (d > slime.r + player.r + 10){
+        moveWithCollisions(slime, dx * slime.speed, dy * slime.speed);
+      } else {
+        // attack
+        if (slime.cooldown <= 0){
+          slime.cooldown = 34;
+          damagePlayer(slime.atk);
+        }
+      }
+    } else {
+      // idle small drift
+      const t = performance.now() * 0.001;
+      moveWithCollisions(slime, Math.cos(t)*0.35, Math.sin(t*1.2)*0.25);
+    }
+  }
+
+  function update(){
+    if (player.hp <= 0) return;
+
+    // movement
+    let mx = 0, my = 0;
+    if (keys.has('w') || keys.has('arrowup')) my -= 1;
+    if (keys.has('s') || keys.has('arrowdown')) my += 1;
+    if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
+    if (keys.has('d') || keys.has('arrowright')) mx += 1;
+
+    const len = Math.hypot(mx, my) || 1;
+    mx /= len; my /= len;
+    moveWithCollisions(player, mx*player.speed, my*player.speed);
+
+    // actions
+    if (keys.has(' ')) { keys.delete(' '); attack(); }
+    if (keys.has('e')) { keys.delete('e'); pickupLoot(); }
+
+    // timers
+    if (player.iFrames > 0) player.iFrames--;
+    if (player.cooldown > 0) player.cooldown--;
+    if (slime.cooldown > 0) slime.cooldown--;
+
+    slimeAI();
+  }
+
+  function drawBar(x,y,w,h,ratio,fg,bg){
+    ctx.fillStyle = bg; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle = fg; ctx.fillRect(x,y,Math.max(0, w*ratio),h);
+    ctx.strokeStyle = "#263244"; ctx.strokeRect(x,y,w,h);
+  }
+
+  function draw(){
+    // clear
+    ctx.clearRect(0,0,W,H);
+
+    // floor
+    ctx.fillStyle = "#0f1720";
+    ctx.fillRect(0,0,W,H);
+
+    // subtle grid
+    ctx.globalAlpha = 0.12;
+    ctx.strokeStyle = "#93c5fd";
+    for(let x=0;x<W;x+=40){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for(let y=0;y<H;y+=40){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+
+    // walls
+    ctx.fillStyle = "#1f2a3a";
+    for (const w of walls) ctx.fillRect(w.x,w.y,w.w,w.h);
+
+    // loot
+    for (const it of loot){
+      if (!it.alive) continue;
+      ctx.beginPath();
+      ctx.fillStyle = (it.type==='potion') ? "#22c55e" : "#eab308";
+      ctx.arc(it.x,it.y,it.r,0,Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = "#052e16";
+      ctx.fillText("E", it.x-4, it.y+4);
+    }
+
+    // slime
+    if (slime.alive){
+      ctx.beginPath();
+      ctx.fillStyle = "#60a5fa";
+      ctx.arc(slime.x, slime.y, slime.r, 0, Math.PI*2);
+      ctx.fill();
+      drawBar(slime.x-28, slime.y-slime.r-16, 56, 8, slime.hp/slime.hpMax, "#ef4444", "#3b1b1b");
+    }
+
+    // player (blink on iFrames)
+    const blink = player.iFrames>0 && (Math.floor(player.iFrames/4)%2===0);
+    if (!blink){
+      ctx.beginPath();
+      ctx.fillStyle = "#fbbf24";
+      ctx.arc(player.x, player.y, player.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+    drawBar(16, 16, 220, 12, player.hp/player.hpMax, "#22c55e", "#143020");
+
+    // hint near slime
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "14px system-ui,Segoe UI,Roboto,Arial";
+    ctx.fillText("Space — удар, E — зелье/подобрать", 16, H-18);
+
+    // stats
+    statsEl.innerHTML =
+      `HP: ${player.hp}/${player.hpMax}<br>` +
+      `Уровень: ${player.lvl} (XP ${player.xp}/${player.xpNext})<br>` +
+      `Атака: ${player.atk}<br>` +
+      `Зелья: ${player.potions}<br>` +
+      `Враг: ${slime.alive ? slime.hp + '/' + slime.hpMax : 'побеждён'}`;
+  }
+
+  log('Добро пожаловать в Mini RPG.');
+  log('Подсказка: подбери зелье (E) рядом с центром карты.');
+
+  function loop(){
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+</body>
+</html>
