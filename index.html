@@ -3,49 +3,103 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Mini RPG</title>
+  <title>Broody — Mini Dungeon RPG</title>
   <style>
-    html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;font-family:system-ui,Segoe UI,Roboto,Arial}
-    #wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px}
-    canvas{background:#0f1720;border:1px solid #263244;border-radius:10px;image-rendering:pixelated}
-    .hud{max-width:900px;width:min(900px,95vw);display:flex;justify-content:space-between;gap:10px;font-size:14px}
-    .box{border:1px solid #263244;border-radius:10px;padding:10px;background:#0c1320}
+    :root{
+      --bg:#0b0f14; --panel:#0c1320; --line:#263244; --text:#e6edf3;
+      --muted:#9fb2c9; --good:#22c55e; --bad:#ef4444; --gold:#fbbf24; --ice:#60a5fa;
+    }
+    html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Roboto,Arial}
+    #wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px}
+    canvas{background:#0f1720;border:1px solid var(--line);border-radius:10px;image-rendering:pixelated;max-width:95vw;height:auto}
+    .row{max-width:980px;width:min(980px,95vw);display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
+    .box{border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--panel);flex:1;min-width:260px}
+    .box h3{margin:0 0 6px 0;font-size:14px;color:var(--muted);font-weight:600}
+    .mono{font-variant-numeric:tabular-nums}
     kbd{border:1px solid #2b3a52;border-bottom-width:3px;padding:1px 6px;border-radius:6px;background:#0b1220}
+    button{background:#0b1220;border:1px solid #2b3a52;color:var(--text);border-radius:8px;padding:6px 10px;cursor:pointer}
+    button:hover{border-color:#4b6aa1}
+    .small{font-size:12px;color:var(--muted)}
+    .line{height:1px;background:var(--line);margin:8px 0}
+    .pill{display:inline-block;border:1px solid #2b3a52;border-radius:999px;padding:2px 8px;font-size:12px;color:var(--muted)}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+    .inv{display:flex;flex-wrap:wrap;gap:6px}
+    .item{border:1px solid #2b3a52;border-radius:8px;padding:6px 8px;background:#0b1220;cursor:pointer;font-size:13px}
+    .item:hover{border-color:#6b8bc7}
+    .item .t{color:var(--muted);font-size:12px}
+    .bad{color:var(--bad)} .good{color:var(--good)} .gold{color:var(--gold)}
+    #log{max-height:180px;overflow:auto}
     a{color:#7dd3fc}
   </style>
 </head>
 <body>
 <div id="wrap">
-  <div class="hud">
-    <div class="box" id="stats">Загрузка…</div>
-    <div class="box" style="flex:1" id="tips">
-      Управление: <kbd>WASD</kbd>/<kbd>Стрелки</kbd> — ходьба, <kbd>Space</kbd> — удар, <kbd>E</kbd> — подобрать/использовать.
-      Цель: победить слизня, не умерев.
+  <div class="row">
+    <div class="box" style="min-width:320px">
+      <h3>Статус</h3>
+      <div id="stats" class="mono">Загрузка…</div>
+      <div class="line"></div>
+      <div class="small">
+        Управление: <kbd>WASD</kbd>/<kbd>Стрелки</kbd> ходьба, <kbd>Space</kbd> удар, <kbd>E</kbd> взаимодействие,
+        <kbd>1</kbd> зелье, <kbd>F5</kbd> обновить (прогресс останется).
+      </div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btnSave">Save</button>
+        <button id="btnLoad">Load</button>
+        <button id="btnNew">New game</button>
+      </div>
+    </div>
+
+    <div class="box">
+      <h3>Инвентарь (клик — использовать/экипировать)</h3>
+      <div id="inv" class="inv"></div>
+      <div class="line"></div>
+      <div id="equip" class="grid"></div>
+      <div class="line"></div>
+      <div id="quests"></div>
+    </div>
+
+    <div class="box" style="min-width:320px">
+      <h3>Лог</h3>
+      <div id="log"></div>
     </div>
   </div>
-  <canvas id="c" width="900" height="520"></canvas>
-  <div class="box" style="max-width:900px;width:min(900px,95vw)" id="log"></div>
+
+  <canvas id="c" width="980" height="540"></canvas>
 </div>
 
 <script>
 (() => {
-  // ----- Simple canvas RPG (no build tools) -----
+  const SAVE_KEY = "broody_save_v1"; // change only if you want to invalidate old saves
+
+  // --- DOM ---
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
-
-  const logEl = document.getElementById('log');
   const statsEl = document.getElementById('stats');
+  const invEl = document.getElementById('inv');
+  const equipEl = document.getElementById('equip');
+  const questsEl = document.getElementById('quests');
+  const logEl = document.getElementById('log');
 
+  const btnSave = document.getElementById('btnSave');
+  const btnLoad = document.getElementById('btnLoad');
+  const btnNew  = document.getElementById('btnNew');
+
+  // --- utils ---
   const W = canvas.width, H = canvas.height;
-
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const dist2 = (ax, ay, bx, by) => (ax-bx)*(ax-bx) + (ay-by)*(ay-by);
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const rand = (a,b)=>a+Math.random()*(b-a);
+  const randi = (a,b)=>Math.floor(rand(a,b+1));
+  const dist2 = (ax,ay,bx,by)=> (ax-bx)*(ax-bx)+(ay-by)*(ay-by);
 
   function log(msg){
     const t = new Date().toLocaleTimeString();
-    logEl.innerHTML = `<div><b>${t}</b> — ${msg}</div>` + logEl.innerHTML;
+    const row = document.createElement('div');
+    row.innerHTML = `<span class="small mono">${t}</span> — ${msg}`;
+    logEl.prepend(row);
   }
 
+  // --- input ---
   const keys = new Set();
   window.addEventListener('keydown', (e) => {
     if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
@@ -53,266 +107,841 @@
   });
   window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 
-  // World: a few walls (rectangles)
-  const walls = [
-    {x:140,y:120,w:620,h:18},
-    {x:140,y:382,w:620,h:18},
-    {x:140,y:120,w:18,h:280},
-    {x:742,y:120,w:18,h:280},
-    {x:360,y:240,w:180,h:18},
+  // --- item system ---
+  const Items = {
+    potion:   {id:"potion", name:"Зелье", type:"consumable", price:12, desc:"+15 HP"},
+    hiPotion: {id:"hiPotion", name:"Большое зелье", type:"consumable", price:28, desc:"+30 HP"},
+    bomb:     {id:"bomb", name:"Бомба", type:"consumable", price:18, desc:"Взрыв по области"},
+    // weapons
+    dagger:   {id:"dagger", name:"Кинжал", type:"weapon", price:20, atk:+2, desc:"+2 Атака"},
+    sword:    {id:"sword", name:"Меч", type:"weapon", price:60, atk:+5, desc:"+5 Атака"},
+    iceBlade: {id:"iceBlade", name:"Ледяной клинок", type:"weapon", price:140, atk:+8, crit:+5, desc:"+8 Атака, +5% крит"},
+    // armor
+    rags:     {id:"rags", name:"Лохмотья", type:"armor", price:10, def:+1, hp:+0, desc:"+1 Защита"},
+    leather:  {id:"leather", name:"Кожанка", type:"armor", price:55, def:+3, hp:+6, desc:"+3 Защита, +6 HP"},
+    plate:    {id:"plate", name:"Латы", type:"armor", price:120, def:+5, hp:+12, desc:"+5 Защита, +12 HP"},
+    // quest
+    bone:     {id:"bone", name:"Кость скелета", type:"quest", price:0, desc:"Квестовый предмет"},
+    gem:      {id:"gem", name:"Осколок кристалла", type:"quest", price:0, desc:"Квестовый предмет"},
+  };
+
+  function makeItem(id, qty=1){
+    return { id, qty };
+  }
+
+  function itemInfo(id){ return Items[id]; }
+
+  // --- player & progression ---
+  const basePlayer = () => ({
+    x: 120, y: 120, r: 12,
+    hp: 35, hpMax: 35,
+    lvl: 1, xp: 0, xpNext: 14,
+    baseAtk: 5, baseDef: 0, speed: 2.25,
+    gold: 25,
+    invMax: 16,
+    inv: [ makeItem("potion", 2), makeItem("dagger", 1), makeItem("rags", 1) ],
+    equip: { weapon: "dagger", armor: "rags" },
+    iFrames: 0, atkCd: 0,
+    floor: 0, // 0..2
+  });
+
+  // --- quests ---
+  function newQuests(){
+    return {
+      killSlimes: {id:"killSlimes", name:"Слизистая зачистка", done:false, progress:0, need:5, reward:{gold:35, item:"potion", qty:2}},
+      bringBone:  {id:"bringBone",  name:"Кости для алхимика", done:false, progress:0, need:3, reward:{gold:80, item:"hiPotion", qty:1}},
+      crystal:    {id:"crystal",    name:"Осколок из глубин", done:false, progress:0, need:1, reward:{gold:140, item:"iceBlade", qty:1}},
+    };
+  }
+
+  // --- world defs ---
+  const floors = [
+    { // Floor 0: Entrance
+      name: "Вход",
+      theme: {floor:"#0f1720", wall:"#1f2a3a"},
+      walls: [
+        {x:60,y:60,w:860,h:18},{x:60,y:460,w:860,h:18},{x:60,y:60,w:18,h:418},{x:902,y:60,w:18,h:418},
+        {x:240,y:180,w:280,h:18},{x:240,y:180,w:18,h:180},{x:500,y:280,w:220,h:18},
+      ],
+      portals: [
+        {x:870,y:420,w:26,h:40,to:1,tx:110,ty:110,label:"↓ вглубь"},
+      ],
+      npcs: [
+        {id:"merchant", x:140,y:400,r:14, kind:"merchant"},
+        {id:"quest", x:220,y:400,r:14, kind:"questgiver"},
+      ],
+      chests: [
+        {id:"c0", x:760,y:120,r:14, opened:false, loot: ()=>[{id:"potion",qty:1},{id:"gold",qty:randi(10,20)}] },
+      ],
+      spawns: () => [
+        mkEnemy("slime", 520, 120, 0),
+        mkEnemy("slime", 760, 320, 0),
+      ],
+    },
+    { // Floor 1: Mid
+      name: "Средний этаж",
+      theme: {floor:"#0f1624", wall:"#223248"},
+      walls: [
+        {x:60,y:60,w:860,h:18},{x:60,y:460,w:860,h:18},{x:60,y:60,w:18,h:418},{x:902,y:60,w:18,h:418},
+        {x:200,y:120,w:18,h:280},{x:200,y:120,w:220,h:18},{x:420,y:120,w:18,h:120},
+        {x:420,y:260,w:180,h:18},{x:600,y:260,w:18,h:180},{x:280,y:360,w:320,h:18},
+      ],
+      portals: [
+        {x:80,y:420,w:26,h:40,to:0,tx:840,ty:420,label:"↑ назад"},
+        {x:870,y:100,w:26,h:40,to:2,tx:110,ty:420,label:"↓ глубже"},
+      ],
+      npcs: [],
+      chests: [
+        {id:"c1", x:120,y:120,r:14, opened:false, loot: ()=>[{id:"gold",qty:randi(25,45)},{id: Math.random()<0.6?"leather":"potion", qty:1}] },
+        {id:"c2", x:820,y:420,r:14, opened:false, loot: ()=>[{id:"bomb",qty:1},{id:"gold",qty:randi(20,35)}] },
+      ],
+      spawns: () => [
+        mkEnemy("slime", 540, 160, 1),
+        mkEnemy("wolf",  720, 360, 1),
+        mkEnemy("wolf",  760, 140, 1),
+      ],
+    },
+    { // Floor 2: Deep
+      name: "Глубины",
+      theme: {floor:"#0d1320", wall:"#2a3854"},
+      walls: [
+        {x:60,y:60,w:860,h:18},{x:60,y:460,w:860,h:18},{x:60,y:60,w:18,h:418},{x:902,y:60,w:18,h:418},
+        {x:180,y:180,w:640,h:18},{x:180,y:180,w:18,h:200},{x:180,y:380,w:300,h:18},
+        {x:500,y:380,w:18,h:80},{x:520,y:320,w:220,h:18},{x:740,y:240,w:18,h:98},
+      ],
+      portals: [
+        {x:80,y:100,w:26,h:40,to:1,tx:840,ty:110,label:"↑ выше"},
+      ],
+      npcs: [],
+      chests: [
+        {id:"c3", x:820,y:120,r:14, opened:false, loot: ()=>[{id:"gold",qty:randi(60,95)},{id:"plate",qty:1}] },
+        {id:"c4", x:740,y:420,r:14, opened:false, loot: ()=>[{id:"gem",qty:1}] },
+      ],
+      spawns: () => [
+        mkEnemy("skeleton", 760, 300, 2),
+        mkEnemy("skeleton", 520, 420, 2),
+        mkEnemy("wolf",     300, 120, 2),
+      ],
+    },
   ];
 
+  // --- enemy factory ---
+  function mkEnemy(kind, x, y, floor){
+    const common = {x,y,r:14, kind, floor, alive:true, hp:10, hpMax:10, atk:3, def:0, speed:1.4, aggro:240, cd:0, iFrames:0};
+    if (kind==="slime") return {...common, r:15, hp:18, hpMax:18, atk:4, def:0, speed:1.25, drop:()=>dropTable("slime")};
+    if (kind==="wolf")  return {...common, r:14, hp:22, hpMax:22, atk:6, def:1, speed:1.9,  drop:()=>dropTable("wolf")};
+    if (kind==="skeleton")return {...common, r:16, hp:30, hpMax:30, atk:7, def:2, speed:1.45, drop:()=>dropTable("skeleton")};
+    return common;
+  }
+
+  function dropTable(kind){
+    // returns array [{id,qty}] where id can be "gold" special
+    const out = [];
+    if (kind==="slime"){
+      out.push({id:"gold",qty:randi(4,10)});
+      if (Math.random()<0.35) out.push({id:"potion",qty:1});
+    }
+    if (kind==="wolf"){
+      out.push({id:"gold",qty:randi(10,18)});
+      if (Math.random()<0.20) out.push({id:"bomb",qty:1});
+      if (Math.random()<0.15) out.push({id:"potion",qty:1});
+    }
+    if (kind==="skeleton"){
+      out.push({id:"gold",qty:randi(18,35)});
+      if (Math.random()<0.45) out.push({id:"bone",qty:1});
+      if (Math.random()<0.12) out.push({id:"hiPotion",qty:1});
+    }
+    return out;
+  }
+
+  // --- collision helpers ---
   function rectsOverlap(a,b){
     return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
   }
+  function entityRect(e){ return {x:e.x-e.r, y:e.y-e.r, w:e.r*2, h:e.r*2}; }
 
-  function moveWithCollisions(ent, dx, dy){
-    // axis separated collisions for simplicity
+  function moveWithCollisions(ent, dx, dy, walls){
     ent.x += dx;
-    let r = {x:ent.x-ent.r, y:ent.y-ent.r, w:ent.r*2, h:ent.r*2};
-    for (const w of walls){
-      if (rectsOverlap(r, w)){
-        ent.x -= dx;
-        break;
-      }
-    }
+    let r = entityRect(ent);
+    for (const w of walls){ if (rectsOverlap(r,w)){ ent.x -= dx; break; } }
     ent.y += dy;
-    r = {x:ent.x-ent.r, y:ent.y-ent.r, w:ent.r*2, h:ent.r*2};
-    for (const w of walls){
-      if (rectsOverlap(r, w)){
-        ent.y -= dy;
-        break;
-      }
-    }
+    r = entityRect(ent);
+    for (const w of walls){ if (rectsOverlap(r,w)){ ent.y -= dy; break; } }
     ent.x = clamp(ent.x, ent.r, W-ent.r);
     ent.y = clamp(ent.y, ent.r, H-ent.r);
   }
 
-  const player = {
-    x: 220, y: 260, r: 14,
-    hp: 30, hpMax: 30,
-    lvl: 1, xp: 0, xpNext: 12,
-    atk: 6, speed: 2.2,
-    potions: 1,
-    iFrames: 0,
-    cooldown: 0,
+  // --- game state ---
+  let player = basePlayer();
+  let quests = newQuests();
+  let enemies = [];
+  let floorState = {
+    chestsOpened: {}, // chestId => true
   };
+  let shopOpen = false;
+  let merchantHover = false;
+  let questHover = false;
 
-  const slime = {
-    x: 660, y: 260, r: 16,
-    hp: 26, hpMax: 26,
-    atk: 4, speed: 1.65,
-    aggro: 220,
-    cooldown: 0,
-    alive: true
-  };
+  function currentFloor(){ return floors[player.floor]; }
 
-  // Simple ground loot: potion drop on start + maybe from slime
-  const loot = [
-    {x: 450, y: 180, r: 10, type: 'potion', alive: true}
-  ];
+  function calcStats(){
+    const w = player.equip.weapon ? itemInfo(player.equip.weapon) : null;
+    const a = player.equip.armor ? itemInfo(player.equip.armor) : null;
+    const atk = player.baseAtk + (w?.atk||0);
+    const def = player.baseDef + (a?.def||0);
+    const hpBonus = (a?.hp||0);
+    const crit = (w?.crit||0);
+    const hpMax = Math.max(1, player.hpMax + hpBonus);
+    if (player.hp > hpMax) player.hp = hpMax;
+    return {atk, def, hpMax, crit};
+  }
 
   function giveXP(amount){
     player.xp += amount;
-    log(`Получено опыта: +${amount}.`);
+    log(`Опыт: +${amount}.`);
     while (player.xp >= player.xpNext){
       player.xp -= player.xpNext;
       player.lvl += 1;
-      player.xpNext = Math.round(player.xpNext * 1.35 + 6);
-      player.hpMax += 6;
-      player.hp = player.hpMax;
-      player.atk += 2;
-      log(`Уровень повышен! Теперь уровень ${player.lvl}, атака ${player.atk}, HP ${player.hpMax}.`);
+      player.xpNext = Math.round(player.xpNext*1.35 + 6);
+      player.hpMax += 7;
+      player.baseAtk += 1;
+      player.baseDef += (player.lvl%3===0)?1:0;
+      player.hp = calcStats().hpMax;
+      log(`Уровень ${player.lvl}! Базовая атака ${player.baseAtk}, базовая защита ${player.baseDef}.`);
     }
   }
 
-  function usePotion(){
-    if (player.potions <= 0) { log('Зелья закончились.'); return; }
-    if (player.hp >= player.hpMax) { log('HP и так полные.'); return; }
-    player.potions--;
-    const heal = 12 + player.lvl * 2;
-    player.hp = clamp(player.hp + heal, 0, player.hpMax);
-    log(`Использовано зелье: +${heal} HP.`);
+  function addItem(id, qty){
+    if (id==="gold"){ player.gold += qty; return true; }
+    // stacking for consumables/quest
+    const info = itemInfo(id);
+    const stackable = (info.type==="consumable" || info.type==="quest");
+    if (stackable){
+      const slot = player.inv.find(s=>s.id===id);
+      if (slot){ slot.qty += qty; return true; }
+    }
+    // new slots
+    for (let i=0;i<qty;i++){
+      if (player.inv.length >= player.invMax) return false;
+      player.inv.push(makeItem(id,1));
+    }
+    return true;
   }
 
-  function pickupLoot(){
-    for (const it of loot){
-      if (!it.alive) continue;
-      if (dist2(player.x, player.y, it.x, it.y) <= (player.r + it.r + 6)**2){
-        it.alive = false;
-        if (it.type === 'potion'){
-          player.potions++;
-          log('Подобрано зелье лечения (+1).');
+  function removeItem(id, qty){
+    let left = qty;
+    for (let i=0; i<player.inv.length && left>0; i++){
+      const s = player.inv[i];
+      if (s.id!==id) continue;
+      const take = Math.min(s.qty, left);
+      s.qty -= take;
+      left -= take;
+      if (s.qty<=0){ player.inv.splice(i,1); i--; }
+    }
+    return left===0;
+  }
+
+  function hasItem(id, qty){
+    let count = 0;
+    for (const s of player.inv) if (s.id===id) count += s.qty;
+    return count >= qty;
+  }
+
+  function useConsumable(id){
+    const info = itemInfo(id);
+    if (!info || info.type!=="consumable") return;
+    if (!removeItem(id,1)) return;
+
+    const st = calcStats();
+    if (id==="potion"){
+      const heal = 15;
+      player.hp = clamp(player.hp + heal, 0, st.hpMax);
+      log(`Зелье: +${heal} HP.`);
+    }
+    if (id==="hiPotion"){
+      const heal = 30;
+      player.hp = clamp(player.hp + heal, 0, st.hpMax);
+      log(`Большое зелье: +${heal} HP.`);
+    }
+    if (id==="bomb"){
+      const radius = 82;
+      const dmg = 12 + player.lvl*2;
+      let hit = 0;
+      for (const e of enemies){
+        if (!e.alive) continue;
+        if (Math.sqrt(dist2(player.x,player.y,e.x,e.y)) <= radius){
+          dealDamageToEnemy(e, dmg, true);
+          hit++;
         }
+      }
+      log(`Бомба взорвалась: ${hit} врагов в радиусе.`);
+    }
+  }
+
+  function equipItem(id){
+    const info = itemInfo(id);
+    if (!info) return;
+    if (info.type==="weapon"){
+      player.equip.weapon = id;
+      log(`Экипировано оружие: ${info.name}.`);
+    }
+    if (info.type==="armor"){
+      player.equip.armor = id;
+      log(`Экипирована броня: ${info.name}.`);
+    }
+    // refresh hpMax effects
+    const st = calcStats();
+    if (player.hp > st.hpMax) player.hp = st.hpMax;
+  }
+
+  function onInventoryClick(id){
+    const info = itemInfo(id);
+    if (!info) return;
+    if (info.type==="consumable") useConsumable(id);
+    else if (info.type==="weapon" || info.type==="armor") equipItem(id);
+    else log(`Это квестовый предмет: ${info.name}.`);
+  }
+
+  function renderUI(){
+    const st = calcStats();
+
+    statsEl.innerHTML =
+      `Локация: <span class="pill mono">Этаж ${player.floor+1} — ${currentFloor().name}</span><br>`+
+      `HP: <span class="good mono">${player.hp}</span>/<span class="mono">${st.hpMax}</span> &nbsp; `+
+      `Атака: <span class="mono">${st.atk}</span> &nbsp; `+
+      `Защита: <span class="mono">${st.def}</span> &nbsp; `+
+      `Крит: <span class="mono">${st.crit||0}%</span><br>`+
+      `Уровень: <span class="mono">${player.lvl}</span> (XP <span class="mono">${player.xp}/${player.xpNext}</span>)<br>`+
+      `Золото: <span class="gold mono">${player.gold}</span> &nbsp; `+
+      `Инв.: <span class="mono">${player.inv.length}/${player.invMax}</span>`;
+
+    invEl.innerHTML = "";
+    if (player.inv.length===0){
+      invEl.innerHTML = `<span class="small">Пусто.</span>`;
+    } else {
+      for (const s of player.inv){
+        const info = itemInfo(s.id);
+        const div = document.createElement('div');
+        div.className = "item";
+        div.innerHTML = `<div><b>${info.name}</b> ${s.qty>1?`x${s.qty}`:""}</div><div class="t">${info.desc||""}</div>`;
+        div.onclick = () => onInventoryClick(s.id);
+        invEl.appendChild(div);
+      }
+    }
+
+    const w = player.equip.weapon ? itemInfo(player.equip.weapon) : null;
+    const a = player.equip.armor ? itemInfo(player.equip.armor) : null;
+    equipEl.innerHTML =
+      `<div><span class="small">Оружие</span><br><b>${w? w.name : "—"}</b></div>`+
+      `<div><span class="small">Броня</span><br><b>${a? a.name : "—"}</b></div>`;
+
+    // quests
+    const q = quests;
+    const qLines = [];
+    qLines.push(`<h3>Квесты</h3>`);
+    qLines.push(`<div class="small">Подойди к NPC “Квесты” на входе и нажми E, чтобы сдать выполненное.</div>`);
+    qLines.push(`<div class="line"></div>`);
+    qLines.push(`<div>1) <b>${q.killSlimes.name}</b>: ${q.killSlimes.done?'<span class="good">Сдан</span>':`${q.killSlimes.progress}/${q.killSlimes.need}`}</div>`);
+    qLines.push(`<div>2) <b>${q.bringBone.name}</b>: ${q.bringBone.done?'<span class="good">Сдан</span>':`${q.bringBone.progress}/${q.bringBone.need}`}</div>`);
+    qLines.push(`<div>3) <b>${q.crystal.name}</b>: ${q.crystal.done?'<span class="good">Сдан</span>':`${q.crystal.progress}/${q.crystal.need}`}</div>`);
+    questsEl.innerHTML = qLines.join("");
+  }
+
+  // --- interactions ---
+  function nearEntity(px,py, ex,ey, pr, er, extra=10){
+    return dist2(px,py,ex,ey) <= (pr+er+extra)*(pr+er+extra);
+  }
+
+  function interact(){
+    const f = currentFloor();
+
+    // portal
+    for (const p of f.portals){
+      const r = {x:p.x,y:p.y,w:p.w,h:p.h};
+      if (rectsOverlap(entityRect(player), r)){
+        changeFloor(p.to, p.tx, p.ty);
+        log(`Переход: ${p.label}.`);
         return;
       }
     }
-    // If no loot nearby, treat E as "use potion"
-    usePotion();
+
+    // chests
+    for (const c of f.chests){
+      if (floorState.chestsOpened[c.id]) continue;
+      if (nearEntity(player.x,player.y, c.x,c.y, player.r, c.r, 8)){
+        openChest(c);
+        return;
+      }
+    }
+
+    // NPCs
+    merchantHover = false;
+    questHover = false;
+    for (const n of f.npcs){
+      if (!nearEntity(player.x,player.y, n.x,n.y, player.r, n.r, 10)) continue;
+      if (n.kind==="merchant"){ openShop(); return; }
+      if (n.kind==="questgiver"){ turnInQuests(); return; }
+    }
+
+    // otherwise: quick potion
+    if (hasItem("potion",1)) useConsumable("potion");
+    else log("Нечего взаимодействовать рядом.");
   }
 
-  function attack(){
-    if (player.cooldown > 0) return;
-    player.cooldown = 22; // frames
-    // melee radius
-    const reach = player.r + 28;
-    if (slime.alive && dist2(player.x, player.y, slime.x, slime.y) <= reach*reach){
-      slime.hp -= player.atk;
-      log(`Удар! Слизень получает ${player.atk} урона.`);
-      if (slime.hp <= 0){
-        slime.hp = 0;
-        slime.alive = false;
-        log('Слизень побеждён! (Квест выполнен)');
-        giveXP(18);
-        // 50% drop potion
-        if (Math.random() < 0.5){
-          loot.push({x: slime.x, y: slime.y, r: 10, type:'potion', alive:true});
-          log('Слизень уронил зелье.');
-        }
-      }
-    } else {
-      log('Удар в пустоту.');
+  function openChest(ch){
+    floorState.chestsOpened[ch.id] = true;
+    const loot = ch.loot();
+    for (const it of loot){
+      const ok = addItem(it.id, it.qty);
+      if (!ok) log(`<span class="bad">Инвентарь полон</span>: часть лута потеряна.`);
+    }
+    log(`Сундук открыт: получено ${loot.map(x=>x.id==="gold"?`${x.qty} золота`:`${itemInfo(x.id).name} x${x.qty}`).join(", ")}.`);
+    autosave();
+  }
+
+  function openShop(){
+    shopOpen = true;
+    const stock = [
+      "potion","hiPotion","bomb",
+      "leather","plate",
+      "sword","iceBlade",
+    ];
+    let html = `<div><b>Торговец</b> — золото: <span class="gold mono">${player.gold}</span></div>`;
+    html += `<div class="small">Покупка: нажми цифру возле товара (1..9). Продажа: клик по предмету в инвентаре с зажатой клавишей <kbd>Shift</kbd>.</div>`;
+    html += `<div class="line"></div>`;
+    html += stock.map((id, idx) => {
+      const info = itemInfo(id);
+      return `<div class="mono">${idx+1}) <b>${info.name}</b> — <span class="gold">${info.price}</span> <span class="small">${info.desc||""}</span></div>`;
+    }).join("");
+    html += `<div class="line"></div><div class="small">Нажми <kbd>E</kbd> ещё раз, чтобы закрыть магазин.</div>`;
+    log(html);
+
+    // one-time key handler for shop buy
+    const handler = (e) => {
+      if (!shopOpen) { window.removeEventListener('keydown', handler); return; }
+      const k = e.key;
+      if (k === "e" || k === "E"){ shopOpen = false; log("Магазин закрыт."); window.removeEventListener('keydown', handler); return; }
+      const num = parseInt(k,10);
+      if (!Number.isFinite(num)) return;
+      const id = stock[num-1];
+      if (!id) return;
+      buyItem(id);
+      renderUI();
+      autosave();
+    };
+    window.addEventListener('keydown', handler);
+  }
+
+  // sell on shift+click inventory
+  window.addEventListener('click', (e) => {
+    if (!e.shiftKey) return;
+    const t = e.target.closest?.('.item');
+    if (!t) return;
+    // find by name in DOM is messy; instead: ignore (kept simple)
+  });
+
+  function buyItem(id){
+    const info = itemInfo(id);
+    if (player.gold < info.price){ log(`<span class="bad">Не хватает золота</span>.`); return; }
+    if (player.inv.length >= player.invMax && !(info.type==="consumable" && player.inv.some(s=>s.id===id)) ){
+      log(`<span class="bad">Инвентарь полон</span>.`);
+      return;
+    }
+    player.gold -= info.price;
+    addItem(id,1);
+    log(`Куплено: ${info.name}.`);
+  }
+
+  function turnInQuests(){
+    let turnedIn = 0;
+
+    // killSlimes
+    if (!quests.killSlimes.done && quests.killSlimes.progress >= quests.killSlimes.need){
+      quests.killSlimes.done = true;
+      const r = quests.killSlimes.reward;
+      player.gold += r.gold;
+      addItem(r.item, r.qty);
+      log(`Квест сдан: ${quests.killSlimes.name}. Награда: ${r.gold} золота, ${itemInfo(r.item).name} x${r.qty}.`);
+      turnedIn++;
+    }
+
+    // bringBone
+    if (!quests.bringBone.done && hasItem("bone", quests.bringBone.need)){
+      removeItem("bone", quests.bringBone.need);
+      quests.bringBone.done = true;
+      const r = quests.bringBone.reward;
+      player.gold += r.gold;
+      addItem(r.item, r.qty);
+      log(`Квест сдан: ${quests.bringBone.name}. Награда: ${r.gold} золота, ${itemInfo(r.item).name} x${r.qty}.`);
+      turnedIn++;
+    }
+
+    // crystal
+    if (!quests.crystal.done && hasItem("gem", 1)){
+      removeItem("gem", 1);
+      quests.crystal.done = true;
+      const r = quests.crystal.reward;
+      player.gold += r.gold;
+      addItem(r.item, r.qty);
+      log(`Квест сдан: ${quests.crystal.name}. Награда: ${r.gold} золота, ${itemInfo(r.item).name} x${r.qty}.`);
+      turnedIn++;
+    }
+
+    if (!turnedIn) log("Пока нечего сдавать. Убей слизней/принеси кости/найди кристалл.");
+    autosave();
+  }
+
+  // --- combat ---
+  function dealDamageToEnemy(e, rawDmg, ignoreDef=false){
+    if (!e.alive) return;
+    if (e.iFrames>0) return;
+    const dmg = Math.max(1, Math.round(rawDmg - (ignoreDef?0:e.def)));
+    e.hp -= dmg;
+    e.iFrames = 16;
+    if (e.hp <= 0){
+      e.hp = 0;
+      e.alive = false;
+      onEnemyKilled(e);
     }
   }
 
-  function damagePlayer(dmg){
-    if (player.iFrames > 0) return;
+  function playerAttack(){
+    if (player.atkCd>0 || player.hp<=0) return;
+    player.atkCd = 18;
+    const st = calcStats();
+    const reach = player.r + 30;
+    let hit = 0;
+
+    for (const e of enemies){
+      if (!e.alive) continue;
+      if (e.floor !== player.floor) continue;
+      if (dist2(player.x,player.y,e.x,e.y) <= reach*reach){
+        const critRoll = Math.random()*100 < (st.crit||0);
+        const dmg = st.atk + (critRoll ? Math.round(st.atk*0.6) : 0);
+        dealDamageToEnemy(e, dmg);
+        hit++;
+      }
+    }
+    if (hit===0) log("Удар в пустоту.");
+    else log(`Удар: попаданий ${hit}.`);
+  }
+
+  function damagePlayer(raw){
+    if (player.iFrames>0 || player.hp<=0) return;
+    const st = calcStats();
+    const dmg = Math.max(1, Math.round(raw - st.def));
     player.hp -= dmg;
-    player.iFrames = 28;
+    player.iFrames = 22;
     log(`Ты получаешь ${dmg} урона.`);
-    if (player.hp <= 0){
+    if (player.hp<=0){
       player.hp = 0;
-      log('Ты погиб. Обнови страницу, чтобы начать заново.');
+      log(`<span class="bad">Ты погиб</span>. Нажми New game или Load.`);
+      autosave();
     }
   }
 
-  function slimeAI(){
-    if (!slime.alive || player.hp <= 0) return;
+  function onEnemyKilled(e){
+    // quest progress
+    if (e.kind==="slime" && !quests.killSlimes.done){
+      quests.killSlimes.progress = clamp(quests.killSlimes.progress+1, 0, quests.killSlimes.need);
+    }
+    // XP
+    const xp = (e.kind==="slime") ? 6 : (e.kind==="wolf") ? 10 : 16;
+    giveXP(xp);
 
-    const d = Math.sqrt(dist2(player.x, player.y, slime.x, slime.y));
-    if (d < slime.aggro){
-      const dx = (player.x - slime.x) / (d || 1);
-      const dy = (player.y - slime.y) / (d || 1);
-      // move toward player if not too close
-      if (d > slime.r + player.r + 10){
-        moveWithCollisions(slime, dx * slime.speed, dy * slime.speed);
+    // drops
+    const drops = e.drop ? e.drop() : [];
+    for (const it of drops){
+      const ok = addItem(it.id, it.qty);
+      if (!ok) log(`<span class="bad">Инвентарь полон</span>: часть добычи потеряна.`);
+    }
+    if (drops.length){
+      log(`Добыча: ${drops.map(x=>x.id==="gold"?`${x.qty} золота`:`${itemInfo(x.id).name} x${x.qty}`).join(", ")}.`);
+    }
+
+    autosave();
+  }
+
+  // --- enemies AI ---
+  function enemyTick(e, walls){
+    if (!e.alive || player.hp<=0) return;
+    if (e.iFrames>0) e.iFrames--;
+    if (e.cd>0) e.cd--;
+
+    const d = Math.sqrt(dist2(player.x,player.y,e.x,e.y));
+    if (d < e.aggro){
+      const dx = (player.x - e.x) / (d||1);
+      const dy = (player.y - e.y) / (d||1);
+
+      const stop = e.r + player.r + 8;
+      if (d > stop){
+        moveWithCollisions(e, dx*e.speed, dy*e.speed, walls);
       } else {
-        // attack
-        if (slime.cooldown <= 0){
-          slime.cooldown = 34;
-          damagePlayer(slime.atk);
+        if (e.cd<=0){
+          e.cd = (e.kind==="wolf")?26:34;
+          damagePlayer(e.atk);
         }
       }
     } else {
-      // idle small drift
-      const t = performance.now() * 0.001;
-      moveWithCollisions(slime, Math.cos(t)*0.35, Math.sin(t*1.2)*0.25);
+      const t = performance.now()*0.001 + e.x*0.01;
+      moveWithCollisions(e, Math.cos(t)*0.35, Math.sin(t*1.1)*0.22, walls);
     }
   }
 
-  function update(){
-    if (player.hp <= 0) return;
-
-    // movement
-    let mx = 0, my = 0;
-    if (keys.has('w') || keys.has('arrowup')) my -= 1;
-    if (keys.has('s') || keys.has('arrowdown')) my += 1;
-    if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
-    if (keys.has('d') || keys.has('arrowright')) mx += 1;
-
-    const len = Math.hypot(mx, my) || 1;
-    mx /= len; my /= len;
-    moveWithCollisions(player, mx*player.speed, my*player.speed);
-
-    // actions
-    if (keys.has(' ')) { keys.delete(' '); attack(); }
-    if (keys.has('e')) { keys.delete('e'); pickupLoot(); }
-
-    // timers
-    if (player.iFrames > 0) player.iFrames--;
-    if (player.cooldown > 0) player.cooldown--;
-    if (slime.cooldown > 0) slime.cooldown--;
-
-    slimeAI();
+  // --- floor mgmt ---
+  function spawnEnemiesForFloor(floorIdx){
+    enemies = floors[floorIdx].spawns();
   }
 
+  function changeFloor(to, tx, ty){
+    player.floor = to;
+    player.x = tx; player.y = ty;
+    // keep opened chests per floor in save, but for runtime:
+    // floorState loaded from save; if not present, keep
+    // also respawn enemies (simple approach)
+    spawnEnemiesForFloor(to);
+    autosave();
+  }
+
+  // --- saving/loading (localStorage) ---
+  function serialize(){
+    return {
+      v: 1,
+      player,
+      quests,
+      floorState,
+      enemies: enemies.map(e=>({
+        kind:e.kind, x:e.x, y:e.y, floor:e.floor,
+        alive:e.alive, hp:e.hp, hpMax:e.hpMax, atk:e.atk, def:e.def, speed:e.speed, aggro:e.aggro
+      }))
+    };
+  }
+
+  function deserialize(obj){
+    if (!obj || typeof obj!=="object") return false;
+    player = obj.player || basePlayer();
+    quests = obj.quests || newQuests();
+    floorState = obj.floorState || {chestsOpened:{}};
+    // rebuild enemies
+    enemies = [];
+    if (Array.isArray(obj.enemies)){
+      for (const e of obj.enemies){
+        const ne = mkEnemy(e.kind, e.x, e.y, e.floor);
+        ne.alive = e.alive;
+        ne.hp = e.hp; ne.hpMax = e.hpMax;
+        ne.atk = e.atk; ne.def = e.def;
+        ne.speed = e.speed; ne.aggro = e.aggro;
+        enemies.push(ne);
+      }
+    } else {
+      spawnEnemiesForFloor(player.floor);
+    }
+    // safety
+    player.floor = clamp(player.floor||0, 0, floors.length-1);
+    player.x = clamp(player.x||120, player.r, W-player.r);
+    player.y = clamp(player.y||120, player.r, H-player.r);
+    const st = calcStats();
+    player.hp = clamp(player.hp||st.hpMax, 0, st.hpMax);
+    return true;
+  }
+
+  function saveGame(){
+    const data = serialize();
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    log("Сохранено.");
+  }
+
+  function loadGame(){
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw){ log("Сейв не найден."); return; }
+    try{
+      const obj = JSON.parse(raw);
+      deserialize(obj);
+      log("Загружено.");
+    } catch {
+      log(`<span class="bad">Ошибка загрузки сейва</span>.`);
+    }
+  }
+
+  let autosaveT = 0;
+  function autosave(){
+    // GitHub Pages runs over https, so localStorage works normally for the origin.
+    // (localStorage behavior differs for file://) — keep it online.
+    saveGame();
+  }
+
+  // --- render ---
   function drawBar(x,y,w,h,ratio,fg,bg){
     ctx.fillStyle = bg; ctx.fillRect(x,y,w,h);
-    ctx.fillStyle = fg; ctx.fillRect(x,y,Math.max(0, w*ratio),h);
+    ctx.fillStyle = fg; ctx.fillRect(x,y,Math.max(0,w*ratio),h);
     ctx.strokeStyle = "#263244"; ctx.strokeRect(x,y,w,h);
   }
 
   function draw(){
-    // clear
+    const f = currentFloor();
     ctx.clearRect(0,0,W,H);
 
     // floor
-    ctx.fillStyle = "#0f1720";
+    ctx.fillStyle = f.theme.floor;
     ctx.fillRect(0,0,W,H);
 
-    // subtle grid
-    ctx.globalAlpha = 0.12;
+    // grid
+    ctx.globalAlpha = 0.10;
     ctx.strokeStyle = "#93c5fd";
     for(let x=0;x<W;x+=40){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
     for(let y=0;y<H;y+=40){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
     ctx.globalAlpha = 1;
 
     // walls
-    ctx.fillStyle = "#1f2a3a";
-    for (const w of walls) ctx.fillRect(w.x,w.y,w.w,w.h);
+    ctx.fillStyle = f.theme.wall;
+    for (const w of f.walls) ctx.fillRect(w.x,w.y,w.w,w.h);
 
-    // loot
-    for (const it of loot){
-      if (!it.alive) continue;
-      ctx.beginPath();
-      ctx.fillStyle = (it.type==='potion') ? "#22c55e" : "#eab308";
-      ctx.arc(it.x,it.y,it.r,0,Math.PI*2);
-      ctx.fill();
-      ctx.fillStyle = "#052e16";
-      ctx.fillText("E", it.x-4, it.y+4);
+    // portals
+    for (const p of f.portals){
+      ctx.fillStyle = "#0b1220";
+      ctx.fillRect(p.x,p.y,p.w,p.h);
+      ctx.strokeStyle = "#4b6aa1";
+      ctx.strokeRect(p.x,p.y,p.w,p.h);
+      ctx.fillStyle = "#cbd5e1";
+      ctx.font = "12px system-ui";
+      ctx.fillText(p.label, p.x-8, p.y-6);
     }
 
-    // slime
-    if (slime.alive){
+    // chests
+    for (const c of f.chests){
+      const opened = !!floorState.chestsOpened[c.id];
+      ctx.fillStyle = opened ? "#374151" : "#b45309";
       ctx.beginPath();
-      ctx.fillStyle = "#60a5fa";
-      ctx.arc(slime.x, slime.y, slime.r, 0, Math.PI*2);
+      ctx.rect(c.x-c.r, c.y-c.r, c.r*2, c.r*2);
       ctx.fill();
-      drawBar(slime.x-28, slime.y-slime.r-16, 56, 8, slime.hp/slime.hpMax, "#ef4444", "#3b1b1b");
+      ctx.fillStyle = "#0b1220";
+      ctx.font = "12px system-ui";
+      ctx.fillText(opened ? "X" : "E", c.x-4, c.y+4);
     }
 
-    // player (blink on iFrames)
-    const blink = player.iFrames>0 && (Math.floor(player.iFrames/4)%2===0);
-    if (!blink){
+    // npcs
+    for (const n of f.npcs){
+      ctx.fillStyle = n.kind==="merchant" ? "#22c55e" : "#a78bfa";
       ctx.beginPath();
+      ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = "#07121f";
+      ctx.font = "12px system-ui";
+      ctx.fillText("E", n.x-4, n.y+4);
+      ctx.fillStyle = "#cbd5e1";
+      ctx.fillText(n.kind==="merchant" ? "Торговец" : "Квесты", n.x-24, n.y-n.r-10);
+    }
+
+    // enemies
+    for (const e of enemies){
+      if (e.floor!==player.floor || !e.alive) continue;
+      const blink = e.iFrames>0 && (Math.floor(e.iFrames/3)%2===0);
+      if (blink) continue;
+
+      if (e.kind==="slime") ctx.fillStyle = "#60a5fa";
+      if (e.kind==="wolf") ctx.fillStyle  = "#9ca3af";
+      if (e.kind==="skeleton") ctx.fillStyle = "#e5e7eb";
+
+      ctx.beginPath();
+      ctx.arc(e.x,e.y,e.r,0,Math.PI*2);
+      ctx.fill();
+
+      drawBar(e.x-26, e.y-e.r-14, 52, 7, e.hp/e.hpMax, "#ef4444", "#3b1b1b");
+    }
+
+    // player
+    const pBlink = player.iFrames>0 && (Math.floor(player.iFrames/4)%2===0);
+    if (!pBlink){
       ctx.fillStyle = "#fbbf24";
-      ctx.arc(player.x, player.y, player.r, 0, Math.PI*2);
+      ctx.beginPath();
+      ctx.arc(player.x,player.y,player.r,0,Math.PI*2);
       ctx.fill();
     }
-    drawBar(16, 16, 220, 12, player.hp/player.hpMax, "#22c55e", "#143020");
 
-    // hint near slime
+    // player HP bar
+    const st = calcStats();
+    drawBar(16,16,240,12, player.hp/st.hpMax, "#22c55e", "#143020");
+
+    // hint
     ctx.fillStyle = "#cbd5e1";
-    ctx.font = "14px system-ui,Segoe UI,Roboto,Arial";
-    ctx.fillText("Space — удар, E — зелье/подобрать", 16, H-18);
-
-    // stats
-    statsEl.innerHTML =
-      `HP: ${player.hp}/${player.hpMax}<br>` +
-      `Уровень: ${player.lvl} (XP ${player.xp}/${player.xpNext})<br>` +
-      `Атака: ${player.atk}<br>` +
-      `Зелья: ${player.potions}<br>` +
-      `Враг: ${slime.alive ? slime.hp + '/' + slime.hpMax : 'побеждён'}`;
+    ctx.font = "14px system-ui";
+    ctx.fillText("Space — удар | E — двери/сундук/NPC | 1 — зелье", 16, H-16);
   }
 
-  log('Добро пожаловать в Mini RPG.');
-  log('Подсказка: подбери зелье (E) рядом с центром карты.');
+  // --- update loop ---
+  function update(){
+    if (player.hp<=0){
+      // allow load/new/save
+      return;
+    }
+
+    const f = currentFloor();
+
+    // movement
+    let mx=0,my=0;
+    if (keys.has('w') || keys.has('arrowup')) my -= 1;
+    if (keys.has('s') || keys.has('arrowdown')) my += 1;
+    if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
+    if (keys.has('d') || keys.has('arrowright')) mx += 1;
+    const len = Math.hypot(mx,my) || 1;
+    mx/=len; my/=len;
+
+    moveWithCollisions(player, mx*player.speed, my*player.speed, f.walls);
+
+    // actions
+    if (keys.has(' ')){ keys.delete(' '); playerAttack(); }
+    if (keys.has('e')){ keys.delete('e'); if (shopOpen){ shopOpen=false; log("Магазин закрыт."); } else interact(); }
+    if (keys.has('1')){ keys.delete('1'); if (hasItem("potion",1)) useConsumable("potion"); else if (hasItem("hiPotion",1)) useConsumable("hiPotion"); else log("Зелий нет."); }
+
+    // timers
+    if (player.iFrames>0) player.iFrames--;
+    if (player.atkCd>0) player.atkCd--;
+
+    // enemy ai
+    for (const e of enemies){
+      if (e.floor!==player.floor) continue;
+      enemyTick(e, f.walls);
+    }
+
+    // autosave timer (every ~10s)
+    autosaveT++;
+    if (autosaveT >= 600){
+      autosaveT = 0;
+      saveGame();
+    }
+  }
 
   function loop(){
     update();
     draw();
+    renderUI();
     requestAnimationFrame(loop);
   }
+
+  // --- buttons ---
+  btnSave.onclick = saveGame;
+  btnLoad.onclick = () => { loadGame(); };
+  btnNew.onclick  = () => {
+    player = basePlayer();
+    quests = newQuests();
+    floorState = {chestsOpened:{}};
+    spawnEnemiesForFloor(player.floor);
+    log("Новая игра начата.");
+    saveGame();
+  };
+
+  // --- init ---
+  log("<b>Broody</b>: подземелье ждёт.");
+  spawnEnemiesForFloor(player.floor);
+
+  // auto-load if exists
+  if (localStorage.getItem(SAVE_KEY)){
+    loadGame();
+    log("Автозагрузка: найден сейв.");
+  } else {
+    log("Подсказка: на входе есть торговец и NPC квестов.");
+  }
+
   loop();
 })();
 </script>
